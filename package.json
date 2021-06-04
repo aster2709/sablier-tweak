@@ -1,22 +1,42 @@
 {
-  "name": "hardhat-sablier",
+  "name": "sablier-tweak",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": " npx hardhat test test/sablier.test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aster2709/sablier-tweak.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/aster2709/sablier-tweak/issues"
+  },
+  "homepage": "https://github.com/aster2709/sablier-tweak#readme",
+  "devDependencies": {
+    "@typechain/ethers-v5": "^7.0.1",
+    "@typechain/hardhat": "^2.1.2",
+    "@types/mocha": "^8.2.3",
+    "ts-node": "^10.0.0",
+    "typechain": "^5.1.1",
+    "typescript": "^4.3.5"
+  },
   "dependencies": {
     "@nomiclabs/hardhat-ethers": "^2.0.2",
-    "@openzeppelin/contracts": "^2.5.0",
+    "@nomiclabs/hardhat-waffle": "^2.0.1",
+    "@openzeppelin/contracts": "^4.2.0",
     "@openzeppelin/contracts-ethereum-package": "^2.2.3",
     "@openzeppelin/upgrades": "^2.8.0",
-    "bn.js": "^4.12.0",
-    "ethers": "^5.3.0",
-    "hardhat": "^2.3.0",
-    "uninstall": "^0.0.0"
+    "chai": "^4.3.4",
+    "ethereum-waffle": "^3.4.0",
+    "ethers": "^5.4.1",
+    "hardhat": "^2.4.1"
   }
 }

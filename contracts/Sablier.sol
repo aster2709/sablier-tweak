@@ -11,6 +11,7 @@ import "./shared-contracts/lifecycle/PausableWithoutRenounce.sol";
 import "./interfaces/ICTokenManager.sol";
 import "./interfaces/IERC1620.sol";
 import "./Types.sol";
+import "hardhat/console.sol";
 
 /**
  * @title Sablier's Money Streaming
@@ -378,14 +379,14 @@ contract Sablier is
         remainingBalance = streams[streamId].remainingBalance;
         ratePerSecond = streams[streamId].ratePerSecond;
         exchangeRateInitial = compoundingStreamsVars[streamId]
-            .exchangeRateInitial
-            .mantissa;
+        .exchangeRateInitial
+        .mantissa;
         senderSharePercentage = compoundingStreamsVars[streamId]
-            .senderShare
-            .mantissa;
+        .senderShare
+        .mantissa;
         recipientSharePercentage = compoundingStreamsVars[streamId]
-            .recipientShare
-            .mantissa;
+        .recipientShare
+        .mantissa;
     }
 
     struct InterestOfLocalVars {
@@ -423,16 +424,19 @@ contract Sablier is
             return (0, 0, 0);
         }
         Types.Stream memory stream = streams[streamId];
-        Types.CompoundingStreamVars memory compoundingStreamVars =
-            compoundingStreamsVars[streamId];
+
+
+            Types.CompoundingStreamVars memory compoundingStreamVars
+         = compoundingStreamsVars[streamId];
         InterestOfLocalVars memory vars;
 
         /*
          * The exchange rate delta is a key variable, since it leads us to how much interest has been earned
          * since the compounding stream was created.
          */
-        Exp memory exchangeRateCurrent =
-            Exp({mantissa: ICERC20(stream.tokenAddress).exchangeRateCurrent()});
+        Exp memory exchangeRateCurrent = Exp({
+            mantissa: ICERC20(stream.tokenAddress).exchangeRateCurrent()
+        });
         if (
             exchangeRateCurrent.mantissa <=
             compoundingStreamVars.exchangeRateInitial.mantissa
@@ -713,8 +717,13 @@ contract Sablier is
         );
         require(vars.shareSum == 100, "shares do not sum up to 100");
 
-        uint256 streamId =
-            createStream(recipient, deposit, tokenAddress, startTime, stopTime);
+        uint256 streamId = createStream(
+            recipient,
+            deposit,
+            tokenAddress,
+            startTime,
+            stopTime
+        );
 
         /*
          * `senderSharePercentage` and `recipientSharePercentage` will be stored as mantissas, so we scale them up
@@ -741,8 +750,8 @@ contract Sablier is
         assert(vars.mathErr == MathError.NO_ERROR);
 
         /* Create and store the compounding stream vars. */
-        uint256 exchangeRateCurrent =
-            ICERC20(tokenAddress).exchangeRateCurrent();
+        uint256 exchangeRateCurrent = ICERC20(tokenAddress)
+        .exchangeRateCurrent();
         compoundingStreamsVars[streamId] = Types.CompoundingStreamVars({
             exchangeRateInitial: Exp({mantissa: exchangeRateCurrent}),
             isEntity: true,
@@ -1093,5 +1102,243 @@ contract Sablier is
             recipientInterest,
             sablierInterest
         );
+    }
+
+    //
+    // OUR CUSTOM ADDITIONS TO SUPPORT INTERVALS
+    //
+
+    event CreateStreamV2(
+        uint256 indexed streamId,
+        address indexed sender,
+        address indexed recipient,
+        uint256 deposit,
+        address tokenAddress,
+        uint256 startTime,
+        uint256 stopTime
+    );
+
+    event CancelStreamV2(
+        uint256 indexed streamId,
+        address indexed sender,
+        address indexed recipient,
+        uint256 senderBalance,
+        uint256 recipientBalance
+    );
+
+    mapping(uint256 => StreamV2) private streamsV2;
+
+    struct StreamV2 {
+        uint256 deposit;
+        uint256 remainingBalance;
+        uint256 startTime;
+        uint256 numIntervals;
+        uint256 intervalPeriod;
+        uint256 intervalsClaimed;
+        address recipient;
+        address sender;
+        address tokenAddress;
+        bool isEntity;
+    }
+
+    struct CreateStreamV2LocalVars {
+        MathError mathErr;
+        uint256 stopTime;
+        uint256 duration;
+    }
+
+    modifier streamExistsV2(uint256 streamId) {
+        require(streamsV2[streamId].isEntity, "stream does not exist");
+        _;
+    }
+
+    function createStreamV2(
+        address recipient,
+        uint256 deposit,
+        address tokenAddress,
+        uint256 startTime,
+        uint256 numIntervals,
+        uint256 intervalPeriod
+    ) public whenNotPaused nonReentrant {
+        require(recipient != address(0), "recipient is zero address");
+        require(deposit > 0, "zero deposit");
+        require(tokenAddress != address(0), "tokenAddress is zero");
+        require(startTime > block.timestamp, "startTime before current time");
+        require(numIntervals > 0, "numIntervals zero");
+        CreateStreamV2LocalVars memory vars;
+        (vars.mathErr, vars.duration) = mulUInt(numIntervals, intervalPeriod);
+        assert(vars.mathErr == MathError.NO_ERROR);
+        (vars.mathErr, vars.stopTime) = addUInt(startTime, vars.duration);
+        require(
+            deposit % numIntervals == 0,
+            "deposit not divisible by numIntervals"
+        );
+        require(
+            IERC20(tokenAddress).transferFrom(
+                msg.sender,
+                address(this),
+                deposit
+            ),
+            "transferFrom failed"
+        );
+        uint256 streamId = nextStreamId;
+        streamsV2[streamId] = StreamV2({
+            deposit: deposit,
+            remainingBalance: deposit,
+            startTime: startTime,
+            numIntervals: numIntervals,
+            intervalPeriod: intervalPeriod,
+            intervalsClaimed: 0,
+            recipient: recipient,
+            sender: msg.sender,
+            tokenAddress: tokenAddress,
+            isEntity: true
+        });
+        emit CreateStreamV2(
+            streamId,
+            msg.sender,
+            recipient,
+            deposit,
+            tokenAddress,
+            startTime,
+            vars.stopTime
+        );
+    }
+
+    function getStreamV2(uint256 streamId)
+        external
+        view
+        streamExistsV2(streamId)
+        returns (
+            address sender,
+            address recipient,
+            uint256 deposit,
+            address tokenAddress,
+            uint256 startTime,
+            uint256 numIntervals,
+            uint256 intervalPeriod,
+            uint256 intervalsClaimed,
+            uint256 remainingBalance
+        )
+    {
+        sender = streamsV2[streamId].sender;
+        recipient = streamsV2[streamId].recipient;
+        deposit = streamsV2[streamId].deposit;
+        tokenAddress = streamsV2[streamId].tokenAddress;
+        startTime = streamsV2[streamId].startTime;
+        numIntervals = streamsV2[streamId].numIntervals;
+        intervalPeriod = streamsV2[streamId].intervalPeriod;
+        remainingBalance = streamsV2[streamId].remainingBalance;
+        intervalsClaimed = streamsV2[streamId].intervalsClaimed;
+    }
+
+    struct BalanceOfV2LocalVars {
+        MathError mathErr;
+        uint256 perInterval;
+        uint256 balance;
+    }
+
+    function balanceOfV2(uint256 streamId, address who)
+        public
+        view
+        streamExistsV2(streamId)
+        returns (uint256)
+    {
+        StreamV2 memory stream = streamsV2[streamId];
+        BalanceOfV2LocalVars memory vars;
+        console.log("block timestamp", block.timestamp);
+        uint256 duration = stream.startTime;
+        for (
+            uint256 i = stream.intervalsClaimed;
+            i <= stream.numIntervals;
+            i++
+        ) {
+            duration += stream.intervalPeriod;
+            console.log("duration", duration);
+            if (duration >= block.timestamp) {
+                (vars.mathErr, vars.perInterval) = divUInt(
+                    stream.deposit,
+                    stream.numIntervals
+                );
+                assert(vars.mathErr == MathError.NO_ERROR);
+                (vars.mathErr, vars.balance) = mulUInt(
+                    vars.perInterval,
+                    i - stream.intervalsClaimed
+                );
+                assert(vars.mathErr == MathError.NO_ERROR);
+                break;
+            }
+        }
+        if (who == stream.recipient) return vars.balance;
+        if (who == stream.sender) return stream.deposit - vars.balance;
+        return 0;
+    }
+
+    function cancelStreamV2(uint256 streamId)
+        external
+        nonReentrant
+        streamExistsV2(streamId)
+        returns (bool)
+    {
+        StreamV2 memory stream = streamsV2[streamId];
+        require(
+            msg.sender == stream.sender || msg.sender == stream.recipient,
+            "caller is not the sender or recipient"
+        );
+        uint256 senderBalance = balanceOfV2(streamId, stream.sender);
+        uint256 recipientBalance = balanceOfV2(streamId, stream.recipient);
+        if (senderBalance > 0) {
+            require(
+                IERC20(stream.tokenAddress).transfer(
+                    stream.sender,
+                    senderBalance
+                ),
+                "transfer failed"
+            );
+        }
+
+        if (senderBalance > 0) {
+            require(
+                IERC20(stream.tokenAddress).transfer(
+                    stream.recipient,
+                    recipientBalance
+                ),
+                "transfer failed"
+            );
+        }
+        emit CancelStreamV2(
+            streamId,
+            stream.sender,
+            stream.recipient,
+            senderBalance,
+            recipientBalance
+        );
+    }
+
+    function withdrawFromStreamV2(uint256 streamId)
+        external
+        whenNotPaused
+        nonReentrant
+        streamExistsV2(streamId)
+        returns (bool)
+    {
+        StreamV2 memory stream = streamsV2[streamId];
+        require(
+            msg.sender == stream.sender || msg.sender == stream.recipient,
+            "caller is not the sender or recipient"
+        );
+        uint256 balance = balanceOfV2(streamId, stream.recipient);
+        require(balance > 0, "amount exceeds the available balance");
+        streamsV2[streamId].intervalsClaimed +=
+            balance /
+            (stream.deposit / stream.numIntervals);
+        uint256 remainingBalance = stream.remainingBalance - balance;
+        streamsV2[streamId].remainingBalance = remainingBalance;
+        if (remainingBalance == 0) delete streamsV2[streamId];
+        require(
+            IERC20(stream.tokenAddress).transfer(stream.recipient, balance),
+            "transfer failed"
+        );
+        return true;
     }
 }
